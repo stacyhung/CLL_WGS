@@ -1,0 +1,439 @@
+---
+title: "CLL WGS analysis"
+author: "Stacy Hung"
+date: "2021/02/08"
+output: html_document
+---
+
+This script concerns the initial analysis of "quads" of patient samples where each quad is comprised of:
+1. Sorted tumor sample
+2. Sorted tumor sample (biological replicate)
+3. Buccal sample (normal, with potential contamination)
+4. Sorted normal sample
+
+For this pilot analysis, we have the completed quad for:
+1. MB0141CLL
+2. MB0291CLL
+
+## Load in libraries
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(DataCombine)  # find and replace
+library(reshape2)     # colsplit
+library(RColorBrewer)
+library(gridExtra)
+library(cowplot)
+```
+
+## Read in metrics
+
+See https://broadinstitute.github.io/picard/picard-metric-definitions.html#CollectWgsMetrics.WgsMetrics for details
+
+```{r}
+metrics <- read.table("~/Documents/CLL_WGS/metrics/all.wgs_metrics.txt", sep = "\t", header = TRUE)
+
+# extract patient ID
+metrics <- separate(
+  metrics,
+  sampleID,
+  into = c("patient", "tissue_type"),
+  sep = "-",
+  remove = FALSE
+)
+
+# get mean coverage
+metrics.avg_coverage <- mean(metrics$MEAN_COVERAGE)
+# convert from wide to long
+metrics.long <- gather(metrics, metric, value, "MEAN_COVERAGE":"SD_COVERAGE")
+
+# sort by decreasing order of metric
+data.sorted <- metrics.long %>%
+  dplyr::arrange(metric, value) %>%
+  dplyr::select(sampleID, patient, tissue_type, metric, value)
+
+# Plot MEAN_COVERAGE and SD_COVERAGE
+p.sorted <- ggplot(data.sorted, aes(x = sampleID, y = value, fill=tissue_type)) + 
+      geom_bar(stat = "identity", width = 0.8) + 
+      facet_wrap( ~ metric, scales = "free") + 
+      ylab("") + xlab("") +
+      theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 10))
+
+pdf("~/Documents/CLL_WGS/figures/barplot-mean_and_SD_coverage.pdf", width = 10, height = 5)
+p.sorted
+dev.off()
+
+mean(metrics$PCT_EXC_MAPQ) # fraction of bases removed due to low mapping quality
+mean(metrics$PCT_EXC_BASEQ) # fraction of bases removed due to low base quality
+mean(metrics$PCT_EXC_DUPE) # fraction of bases removed due to duplicates
+mean(metrics$PCT_EXC_TOTAL) # total bases removed based on all filters
+```
+
+Samples: `r unique(metrics$sampleID)`
+
+Average coverage (n=`r length(unique(metrics$sampleID))`): `r round(metrics.avg_coverage)`X
+
+
+## Define samples to be excluded and global variables
+
+```{r}
+# mappings for 3-letter amino acids to 1-letter amino acid codes	
+AA.replaces <- data.frame(from = c("Ala", "Arg", "Asn", "Asp", "Asx", "Cys", "Glu", "Gln", "Glx", "Gly", "His", 	
+                                   "Ile", "Leu", "Lys", "Met", "Phe", "Pro", "Ser", "Thr", "Trp", "Tyr", "Val"), 	
+                          to = c("A", "R", "N", "D", "B", "C", "E", "Q", "Z", "G", "H", 	
+                                 "I", "L", "K", "M", "F", "P", "S", "T", "W", "Y", "V"))	
+
+# filter for protein coding biotypes
+# See https://github.com/pcingola/SnpEff/blob/master/src/main/java/org/snpeff/interval/BioType.java
+biotype.keeps <- c("IG_C_gene", "IG_D_gene", "IG_gene", "IG_J_gene", "IGL_V_gene", "IG_M_gene", "IG_V_gene",
+                   "IG_Z_gene", "nonsense_mediated_decay", "nontranslating_CDS", "non_stop_decay",
+                   "polymorphic_pseudogene", "TR_C_gene", "TR_D_gene", "TR_J_gene", "protein_coding")
+
+# define thresholds for all samples EXCEPT for tumors paired to LMD normals
+MAX_SOMATIC_PVAL = 0.05
+MIN_VAR_READS_TUMOR = 3
+MIN_VAF = 5
+```
+
+Strategy for assessing ability of buccals to serve as normals:
+
+1. Compare variant overlap between T vs. buccal and T vs. sorted normal
+2. Assess "purity" of buccal samples by looking at buccal vs. sorted normal
+3. Do we see high numbers of TP53 mutations?
+
+
+## ####### ##
+## VARSCAN ##
+## ####### ##
+
+```{r}
+# T vs. buccal
+snvs.T_vs_buccal <- read.table("~/Documents/CLL_WGS/varScan/T_vs_buccalN/all_snvs.snpEff_canonical.dbsnp_annotated.cosmic_annotated.effect_filtered.biotype_filtered.txt", sep = "\t", header = TRUE, fill = TRUE)
+indels.T_vs_buccal <- read.table("~/Documents/CLL_WGS/varScan/T_vs_buccalN/all_indels.snpEff_canonical.dbsnp_annotated.cosmic_annotated.effect_filtered.biotype_filtered.txt", sep = "\t", header = TRUE, fill = TRUE)
+
+# T / buccal vs. sorted
+snvs.T_vs_sorted <- read.table("~/Documents/CLL_WGS/varScan/T_vs_sortedN/all_snvs.snpEff_canonical.dbsnp_annotated.cosmic_annotated.effect_filtered.biotype_filtered.txt", sep = "\t", header = TRUE, fill = TRUE)
+indels.T_vs_sorted <- read.table("~/Documents/CLL_WGS/varScan/T_vs_sortedN/all_indels.snpEff_canonical.dbsnp_annotated.cosmic_annotated.effect_filtered.biotype_filtered.txt", sep = "\t", header = TRUE, fill = TRUE)
+
+snvs <- rbind(snvs.T_vs_buccal, snvs.T_vs_sorted)
+rm(snvs.T_vs_buccal, snvs.T_vs_sorted)
+indels <- rbind(indels.T_vs_buccal, indels.T_vs_sorted)
+rm(indels.T_vs_buccal, indels.T_vs_sorted)
+```
+
+## VarScan - Processing data for filtering
+
+```{r}
+# specify type of mutation
+indels$type <- "indel"
+snvs$type <- "snv"
+
+# combine snvs and indels
+calls <- rbind(indels, snvs)
+rm(indels)
+rm(snvs)
+
+# rename columns	
+colnames(calls) <- c("sample", "chr", "pos", "external_id", "ref", "alt", "filter", 
+                             "gt_normal", "gq_normal", "normal.depth", "normal.ref_reads", "normal.var_reads",
+                             "normal.allele_freq", "normal.depth4", "tumor.gt", "tumor.gq", "tumor.depth",
+                             "tumor.ref_reads", "tumor.var_reads", "tumor.allele_freq", "tumor.depth4", 
+                             "depth", "somatic", "somatic_status", "gpv", "somatic_p_value", "allele", 
+                             "effect", "impact", "gene", "feature", "feature_id", "biotype", "exon_rank", 
+                             "hgvs_cdna", "hgvs_protein", "cds_pos", "cds_len", "AA_pos", "AA_len", "type")
+
+# create a tumor_id / normal id column based on the sample id (format is <tumor_id>_<normal_id>)
+calls$tumor.id <- gsub("(.*)\\_(.*)","\\1", calls$sample)
+calls$normal.id <- gsub("(.*)\\_(.*)","\\2", calls$sample)
+
+# remove "%" from the allele frequency	
+calls$normal.allele_freq <- gsub("(.*)\\%(.*)","\\1", calls$normal.allele_freq)	
+calls$tumor.allele_freq <- gsub("(.*)\\%(.*)","\\1", calls$tumor.allele_freq)	
+
+# use 1-letter amino acid codes
+calls <- FindReplace(data = calls, 	
+                                    Var = "hgvs_protein",	
+                                    replaceData = AA.replaces,	
+                                    from = "from",	
+                                    to = "to",	
+                                    exact = FALSE)	
+
+```
+
+#table(calls$sample)
+
+MB0141CLL-tumor1_MB0141CLL-buccal MB0141CLL-tumor2_MB0141CLL-buccal 
+                            62710                             62005 
+MB0291CLL-tumor1_MB0291CLL-buccal MB0291CLL-tumor2_MB0291CLL-buccal 
+                            32295                             32173 
+MB0141CLL-buccal_MB0141CLL-normal MB0141CLL-tumor1_MB0141CLL-normal 
+                            56523                             63408 
+MB0141CLL-tumor2_MB0141CLL-normal MB0291CLL-buccal_MB0291CLL-normal 
+                            62616                             28531 
+MB0291CLL-tumor1_MB0291CLL-normal MB0291CLL-tumor2_MB0291CLL-normal 
+                            62298                             62170 
+
+## VarScan - Filtering
+
+```{r}
+# VarScan-specific filters - somatic p-value + strand bias
+# --------------------------------------------------------
+
+# filter for somatic variants
+calls <- filter(calls, calls$somatic == "true") # keep 4196 of 77856 variants
+
+# filter for somatic p-value depending on the LMD or not
+calls <- filter(calls,as.numeric(somatic_p_value) < MAX_SOMATIC_PVAL) # keep 4061 of 4196 variants
+calls$somatic_p_value <- NULL # no longer needed
+
+#>table(calls$sample)
+#MB0141CLL-tumor1_MB0141CLL-buccal MB0141CLL-tumor2_MB0141CLL-buccal 
+#                              451                               426 
+#MB0291CLL-tumor1_MB0291CLL-buccal MB0291CLL-tumor2_MB0291CLL-buccal 
+#                              248                               256 
+#MB0141CLL-buccal_MB0141CLL-normal MB0141CLL-tumor1_MB0141CLL-normal 
+#                             1083                               219 
+#MB0141CLL-tumor2_MB0141CLL-normal MB0291CLL-buccal_MB0291CLL-normal 
+#                              220                               544 
+#MB0291CLL-tumor1_MB0291CLL-normal MB0291CLL-tumor2_MB0291CLL-normal 
+#                              211                               258 
+
+# extract depth4 fields in order to apply strand filter
+calls <-	
+  separate(data = calls,	
+           col = tumor.depth4,	
+           into = c("tumor.ref_reads.forward", "tumor.ref_reads.reverse",
+                  "tumor.var_reads.forward", "tumor.var_reads.reverse"),	
+           sep = ",",	convert = TRUE,
+           remove = FALSE)	
+# apply the strand filter
+calls <- filter(calls, 
+                        !(as.numeric(tumor.var_reads.forward) > as.numeric(0.9*as.numeric(tumor.var_reads))) & 
+                          !(as.numeric(tumor.var_reads.reverse) > as.numeric(0.9*as.numeric(tumor.var_reads))))
+# update actual tumor depth
+calls$tumor.depth <- calls$tumor.ref_reads.forward + calls$tumor.ref_reads.reverse +
+  calls$tumor.var_reads.forward + calls$tumor.var_reads.reverse
+
+# remove columns for strand bias check since they are no longer needed
+calls$tumor.ref_reads.forward <- NULL
+calls$tumor.ref_reads.reverse <- NULL
+calls$tumor.var_reads.forward <- NULL
+calls$tumor.var_reads.reverse <- NULL
+calls$tumor.depth4 <- NULL
+
+# Filters that are applied to all samples
+# ---------------------------------------
+
+calls <- filter(calls, as.numeric(calls$tumor.allele_freq) >= MIN_VAF)
+calls <- filter(calls, as.numeric(calls$tumor.var_reads) >= MIN_VAR_READS_TUMOR)
+
+# keep only variants that have a protein-altering impact
+effects.exclude <- c("intron_variant", "intragenic_variant", "", "sequence_feature", "synonymous_variant")
+calls <- filter(calls, !(calls$effect %in% effects.exclude))
+calls <- filter(calls, calls$impact != "LOW") # 1336 of 1797 
+calls <- filter(calls, calls$biotype %in% biotype.keeps) # same
+calls <- unique(calls[grep("^ENST", calls$feature_id), ]) # 1053 of 1458
+
+# remove duplicates (e.g. due to multiple effects)
+calls <- unique(calls)	
+
+calls$id = as.character(paste(	
+  calls$chr, 	
+  calls$pos, 	
+  calls$ref,	
+  calls$alt,	
+  sep = "."	
+  ))
+
+write.table(calls, "~/Documents/CLL_WGS/varScan/varScan-snvs_indels-min_VAF_5.txt", 
+            sep = "\t", quote = FALSE, row.names = FALSE)
+```
+
+#table(calls$sample)
+MB0141CLL-tumor1_MB0141CLL-buccal MB0141CLL-tumor2_MB0141CLL-buccal 
+                              409                               382 
+MB0291CLL-tumor1_MB0291CLL-buccal MB0291CLL-tumor2_MB0291CLL-buccal 
+                              228                               220 
+MB0141CLL-buccal_MB0141CLL-normal MB0141CLL-tumor1_MB0141CLL-normal 
+                              891                               206 
+MB0141CLL-tumor2_MB0141CLL-normal MB0291CLL-buccal_MB0291CLL-normal 
+                              209                               459 
+MB0291CLL-tumor1_MB0291CLL-normal MB0291CLL-tumor2_MB0291CLL-normal 
+                              189                               226 
+                              
+## Visualization of numbers of somatic mutations per pair
+
+```{r}
+calls <- read.table("~/Documents/CLL_WGS/varScan/varScan-snvs_indels-min_VAF_5.txt", sep = "\t", header = TRUE, fill = TRUE)
+
+plot_data <- as.data.frame(table(calls$sample, calls$type))
+colnames(plot_data) <- c("sample", "type", "num_mutations")
+
+p <- ggplot(data = plot_data, aes(x = reorder(sample, -num_mutations), y = num_mutations, fill = type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  xlab("") + ylab("Number of Mutations")
+
+p.flip <- ggplot(data = plot_data, aes(x = reorder(sample, -num_mutations), y = num_mutations, fill = type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  coord_flip()
+
+pdf("~/Documents/CLL_WGS/figures/barplot-num_mutations-type.pdf", width = 7, height = 5)
+p.flip
+dev.off()
+
+# make a pie chart of indels in sample with high indel count
+temp <- filter(calls, calls$sample == "MB0141CLL-buccal_MB0141CLL-normal")
+temp.indels <- filter(temp, temp$type == "indel")
+temp.indels$effect <- factor(temp.indels$effect)
+indel.plot_data <- as.data.frame(table(temp.indels$effect))
+colnames(indel.plot_data) <- c("effect", "num_mutations")
+
+bp <- ggplot(indel.plot_data, aes(x="", y=num_mutations, fill=effect)) +
+  geom_bar(width = 1, stat = "identity") + xlab("")
+
+pie <- bp + coord_polar("y", start = 0) + 
+  scale_fill_brewer(palette="Pastel1") + 
+  theme(legend.position="bottom")
+
+pdf("~/Documents/CLL_WGS/figures/pie-MB0141CLL-buccal_MB0141CLL-normal-indels-effect.pdf", width = 7, height = 6)
+pie
+dev.off()
+
+```
+
+## Examine overlap
+
+Venn diagram 1 - find overlap between:
+  a. MB0141CLL-tumor1_MB0141CLL-buccal
+  b. MB0141CLL-tumor1_MB0141CLL-normal
+  
+Venn diagram 2 - find overlap between:
+  a. MB0141CLL-tumor2_MB0141CLL-buccal
+  b. MB0141CLL-tumor2_MB0141CLL-normal
+  
+Venn diagram 3 - find overlap between:
+  a. MB0291CLL-tumor1_MB0291CLL-buccal
+  b. MB0291CLL-tumor1_MB0291CLL-normal
+  
+Venn diagram 4 - find overlap between:
+  a. MB0291CLL-tumor2_MB0291CLL-buccal
+  b. MB0291CLL-tumor2_MB0291CLL-normal
+
+
+```{r}
+library(VennDiagram)
+
+# overlap of variants for each tumor duplicate (variants identified with buccal vs. sorted normal)
+
+MB0141_T1_vs_buccal <- unique(filter(calls, calls$sample == "MB0141CLL-tumor1_MB0141CLL-buccal"))$id
+MB0141_T1_vs_normal <- unique(filter(calls, calls$sample == "MB0141CLL-tumor1_MB0141CLL-normal"))$id
+
+venn.diagram(
+  x = list(MB0141_T1_vs_buccal, MB0141_T1_vs_normal),
+  category.names = c("MB0141_T1_vs_buccal" , "MB0141_T1_vs_normal"),
+  filename = "~/Documents/CLL_WGS/figures/venn-MB0141_T1.png",
+  output=TRUE
+)
+
+MB0141_T2_vs_buccal <- unique(filter(calls, calls$sample == "MB0141CLL-tumor2_MB0141CLL-buccal"))$id
+MB0141_T2_vs_normal <- unique(filter(calls, calls$sample == "MB0141CLL-tumor2_MB0141CLL-normal"))$id
+
+venn.diagram(
+  x = list(MB0141_T2_vs_buccal, MB0141_T2_vs_normal),
+  category.names = c("MB0141_T2_vs_buccal" , "MB0141_T2_vs_normal"),
+  filename = "~/Documents/CLL_WGS/figures/venn-MB0141_T2.png",
+  output=TRUE
+)
+
+MB0291_T1_vs_buccal <- unique(filter(calls, calls$sample == "MB0291CLL-tumor1_MB0291CLL-buccal"))$id
+MB0291_T1_vs_normal <- unique(filter(calls, calls$sample == "MB0291CLL-tumor1_MB0291CLL-normal"))$id
+
+venn.diagram(
+  x = list(MB0291_T1_vs_buccal, MB0291_T1_vs_normal),
+  category.names = c("MB0291_T1_vs_buccal" , "MB0291_T1_vs_normal"),
+  filename = "~/Documents/CLL_WGS/figures/venn-MB0291_T1.png",
+  output=TRUE
+)
+
+MB0291_T2_vs_buccal <- unique(filter(calls, calls$sample == "MB0291CLL-tumor2_MB0291CLL-buccal"))$id
+MB0291_T2_vs_normal <- unique(filter(calls, calls$sample == "MB0291CLL-tumor2_MB0291CLL-normal"))$id
+
+venn.diagram(
+  x = list(MB0291_T2_vs_buccal, MB0291_T2_vs_normal),
+  category.names = c("MB0291_T2_vs_buccal" , "MB0291_T2_vs_normal"),
+  filename = "~/Documents/CLL_WGS/figures/venn-MB0291_T2.png",
+  output=TRUE
+)
+
+# overlap of all variants for each patient
+
+venn.diagram(
+  x = list(MB0141_T1_vs_buccal, MB0141_T1_vs_normal, MB0141_T2_vs_buccal, MB0141_T2_vs_normal),
+  category.names = c("MB0141_T1_vs_buccal", "MB0141_T1_vs_normal", "MB0141_T2_vs_buccal", "MB0141_T2_vs_normal"),
+  filename = "~/Documents/CLL_WGS/figures/venn-MB0141T-all_pairs.png",
+  output=TRUE
+)
+
+venn.diagram(
+  x = list(MB0291_T1_vs_buccal, MB0291_T1_vs_normal, MB0291_T2_vs_buccal, MB0291_T2_vs_normal),
+  category.names = c("MB0291_T1_vs_buccal", "MB0291_T1_vs_normal", "MB0291_T2_vs_buccal", "MB0291_T2_vs_normal"),
+  filename = "~/Documents/CLL_WGS/figures/venn-MB0291_T2-all_pairs.png",
+  output=TRUE
+)
+
+# print out overlaps
+library(gplots)
+MB0141.venn <- venn(list(MB0141_T1_vs_buccal, MB0141_T2_vs_buccal, MB0141_T2_vs_normal, MB0141_T1_vs_normal))
+#MB0141.table <- print(MB0141.venn)
+
+# get intersections
+MB0141.intersect <- attr(MB0141.venn, "intersection")
+
+# Look at all of the subsets
+str(MB0141.intersect)
+
+# A = T1 vs. buccal
+# B = T2 vs. buccal
+# C = T2 vs. sorted normal
+# D = T1 vs. sorted normal
+
+# interested in: A unique, B unique, C unique, D unique, A+B, C+D, A+B+C+D
+
+# Extract and combine the subsets of interest..
+
+# variants unique to T1 vs. buccal
+A_only <- unique(c(MB0141.intersect$A))
+A_only.label <- rep("A_only", length(A_only))
+A_only.df <- data.frame(A_only, A_only.label)
+
+# variants unique to T2 vs. buccal
+B_only <- unique(c(MB0141.intersect$B))
+# variants unique to buccal normal
+A_and_B <- unique(c(MB0141.intersect$'A:B'))
+
+# variants unique to T1 vs. sortedN
+C_only <- unique(c(MB0141.intersect$C))
+# variants unique to T2 vs. sortedN
+D_only <- unique(c(MB0141.intersect$D))
+# variants unique to sortedN normal
+C_and_D <- unique(c(MB0141.intersect$'C:D'))
+
+# variants found in all 4 pairs
+A_B_C_D <- unique(c(MB0141.intersect$'A:B:C:D'))
+
+class.df<- data.frame(User.ID, Name,  
+                      gender, Marks, Number)
+
+all.sets <- unique(c(A_only, B_only, A_and_B, C_only, D_only, C_and_D))
+```
+
+
+
+
+
+
+
+
