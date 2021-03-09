@@ -265,7 +265,18 @@ MB0291CLL-tumor1_MB0291CLL-normal MB0291CLL-tumor2_MB0291CLL-normal
 ## Visualization of numbers of somatic mutations per pair
 
 ```{r}
-calls <- read.table("~/Documents/CLL_WGS/varScan/varScan-snvs_indels-min_VAF_5.txt", sep = "\t", header = TRUE, fill = TRUE)
+calls <- read.table("~/Documents/CLL_WGS/calls/no_normal_or_UTR_filter/varScan-snvs_indels-min_VAF_5.txt", sep = "\t", header = TRUE, fill = TRUE)
+
+##########################################################
+## NEW: apply filters for (1) normal contamination and (2) to remove UTR mutations
+##########################################################
+
+utr.effects <- c("3_prime_UTR_variant", "5_prime_UTR_variant")
+calls.filtered <- filter(calls, as.numeric(calls$normal.var_reads) < 2 & !(calls$effect %in% utr.effects))
+
+calls <- calls.filtered
+
+##########################################################
 
 plot_data <- as.data.frame(table(calls$sample, calls$type))
 colnames(plot_data) <- c("sample", "type", "num_mutations")
@@ -302,6 +313,100 @@ pdf("~/Documents/CLL_WGS/figures/pie-MB0141CLL-buccal_MB0141CLL-normal-indels-ef
 pie
 dev.off()
 
+```
+
+## Look at allele frequency distributions for MB0141
+
+```{r}
+# MB0141 calls
+calls.MB0141.filtered <- calls[! grepl("MB0291", calls$sample), ]
+# remove buccal vs. normal
+calls.MB0141.filtered <- filter(calls.MB0141.filtered, calls.MB0141.filtered$sample != "MB0141CLL-buccal_MB0141CLL-normal")
+calls.MB0141.filtered$sample <- factor(calls.MB0141.filtered$sample)
+
+samples <- unique(calls.MB0141.filtered$sample)
+
+# for each sample, create AF density plot with vertical at peak value
+AF.plots <- vector('list', length(samples))
+
+# Histogram with density plot
+for (i in seq_along(samples)) {
+  temp <- subset(calls.MB0141.filtered, calls.MB0141.filtered$sample == samples[i])
+  
+  num_mutations <- nrow(temp)
+  
+  # identify peak value for current sample
+  max_y_density <- which.max(density(temp$tumor.allele_freq)$y)
+  max_x_intercept <- density(temp$tumor.allele_freq)$x[max_y_density]
+  max_y_intercept <- density(temp$tumor.allele_freq)$y[max_y_density]
+  
+  print(max_y_intercept)
+  
+  AF.plots[[i]] <- ggplot(temp, aes(as.numeric(tumor.allele_freq))) + 
+    geom_histogram(aes(y=..density..), colour="black", fill="white") +
+    geom_density(alpha=.2, fill="#FF6666") +
+    geom_vline(xintercept = max_x_intercept, col="red", lty=2) +
+    xlab("Allele frequency (%)") + ylab("Density") +
+    annotate("text", 
+             y = max_y_intercept+0.2*max_y_intercept,
+             x = max(temp$tumor.allele_freq),
+             label = paste("Peak AF: ", round(max_x_intercept, digits = 2), "%", sep = ""),
+             hjust = 1) + 
+    theme(axis.title.x = element_blank(), axis.title.y = element_blank()) +
+    ylim(0, max_y_intercept+0.25*max_y_intercept) +
+    ggtitle(label = paste(temp$sample, " (n = ", num_mutations, ")", sep = ""))
+}
+#do.call("grid.arrange", c(AF.plots, ncol=1))
+pdf("~/Documents/CLL_WGS/figures/AF_density-MB0141_tumor_pairs.pdf", width = 10, height = 5)
+grid.arrange(grobs = AF.plots, ncol=2, bottom = "Allele frequency (%)", left = "Density")
+dev.off()
+```
+
+## Look at allele frequency distributions for MB0291
+
+```{r}
+# MB0291 calls
+calls.MB0291.filtered <- calls[! grepl("MB0141", calls$sample), ]
+# remove buccal vs. normal
+calls.MB0291.filtered <- filter(calls.MB0291.filtered, calls.MB0291.filtered$sample != "MB0291CLL-buccal_MB0291CLL-normal")
+calls.MB0291.filtered$sample <- factor(calls.MB0291.filtered$sample)
+
+samples <- unique(calls.MB0291.filtered$sample)
+
+# for each sample, create AF density plot with vertical at peak value
+AF.plots <- vector('list', length(samples))
+
+# Histogram with density plot
+for (i in seq_along(samples)) {
+  temp <- subset(calls.MB0291.filtered, calls.MB0291.filtered$sample == samples[i])
+  
+  num_mutations <- nrow(temp)
+  
+  # identify peak value for current sample
+  max_y_density <- which.max(density(temp$tumor.allele_freq)$y)
+  max_x_intercept <- density(temp$tumor.allele_freq)$x[max_y_density]
+  max_y_intercept <- density(temp$tumor.allele_freq)$y[max_y_density]
+  
+  print(max_y_intercept)
+  
+  AF.plots[[i]] <- ggplot(temp, aes(as.numeric(tumor.allele_freq))) + 
+    geom_histogram(aes(y=..density..), colour="black", fill="white") +
+    geom_density(alpha=.2, fill="#FF6666") +
+    geom_vline(xintercept = max_x_intercept, col="red", lty=2) +
+    xlab("Allele frequency (%)") + ylab("Density") +
+    annotate("text", 
+             y = max_y_intercept+0.2*max_y_intercept,
+             x = max(temp$tumor.allele_freq),
+             label = paste("Peak AF: ", round(max_x_intercept, digits = 2), "%", sep = ""),
+             hjust = 1) + 
+    theme(axis.title.x = element_blank(), axis.title.y = element_blank()) +
+    ylim(0, max_y_intercept+0.25*max_y_intercept) +
+    ggtitle(label = paste(temp$sample, " (n = ", num_mutations, ")", sep = ""))
+}
+#do.call("grid.arrange", c(AF.plots, ncol=1))
+pdf("~/Documents/CLL_WGS/figures/AF_density-MB0291_tumor_pairs.pdf", width = 10, height = 5)
+grid.arrange(grobs = AF.plots, ncol=2, bottom = "Allele frequency (%)", left = "Density")
+dev.off()
 ```
 
 ## Examine overlap
@@ -384,6 +489,11 @@ venn.diagram(
   output=TRUE
 )
 
+```
+
+## Look at specific overlaps within venn for MB0141
+
+```{r}
 # print out overlaps
 library(gplots)
 MB0141.venn <- venn(list(MB0141_T1_vs_buccal, MB0141_T2_vs_buccal, MB0141_T2_vs_normal, MB0141_T1_vs_normal))
@@ -406,34 +516,353 @@ str(MB0141.intersect)
 
 # variants unique to T1 vs. buccal
 A_only <- unique(c(MB0141.intersect$A))
-A_only.label <- rep("A_only", length(A_only))
+A_only.label <- rep("T1_v_buccal_only", length(A_only))
 A_only.df <- data.frame(A_only, A_only.label)
+colnames(A_only.df) <- c("id", "set")
 
 # variants unique to T2 vs. buccal
 B_only <- unique(c(MB0141.intersect$B))
+B_only.label <- rep("T2_v_buccal_only", length(B_only))
+B_only.df <- data.frame(B_only, B_only.label)
+colnames(B_only.df) <- c("id", "set")
+
 # variants unique to buccal normal
 A_and_B <- unique(c(MB0141.intersect$'A:B'))
+A_and_B.label <- rep("T1_and_T2_v_buccal", length(A_and_B))
+A_and_B.df <- data.frame(A_and_B, A_and_B.label)
+colnames(A_and_B.df) <- c("id", "set")
 
 # variants unique to T1 vs. sortedN
 C_only <- unique(c(MB0141.intersect$C))
+C_only.label <- rep("T2_v_sortedN_only")
+C_only.df <- data.frame(C_only, C_only.label)
+colnames(C_only.df) <- c("id", "set")
+
 # variants unique to T2 vs. sortedN
 D_only <- unique(c(MB0141.intersect$D))
+D_only.label <- rep("T1_v_sortedN_only")
+D_only.df <- data.frame(D_only, D_only.label)
+colnames(D_only.df) <- c("id", "set")
+
 # variants unique to sortedN normal
 C_and_D <- unique(c(MB0141.intersect$'C:D'))
+C_and_D.label <- rep("T1_and_T2_v_sortedN")
+C_and_D.df <- data.frame(C_and_D, C_and_D.label)
+colnames(C_and_D.df) <- c("id", "set")
 
 # variants found in all 4 pairs
 A_B_C_D <- unique(c(MB0141.intersect$'A:B:C:D'))
+A_B_C_D.label <- rep("all_pairs", length(A_B_C_D))
+A_B_C_D.df <- data.frame(A_B_C_D, A_B_C_D.label)
+colnames(A_B_C_D.df) <- c("id", "set")
 
-class.df<- data.frame(User.ID, Name,  
-                      gender, Marks, Number)
+all.sets <- rbind(A_only.df, B_only.df, A_and_B.df, C_only.df, D_only.df, C_and_D.df, A_B_C_D.df)
 
-all.sets <- unique(c(A_only, B_only, A_and_B, C_only, D_only, C_and_D))
+# attach set labels to calls
+calls.with_sets <- merge(calls, all.sets, by = "id", all.x = TRUE)
+
+write.table(calls.with_sets, 
+            "~/Documents/CLL_WGS/calls/up_to_1_normal_and_UTR_filter/varScan-snvs_indels-MB0141_venn_sets.txt",
+           sep = "\t", quote = FALSE, row.names = FALSE)
+
+```
+
+## Analyze recurrently mutated genes in MB0141
+
+```{r}
+library(ggplot2)
+library(ggpubr)
+
+# remove MB0291 calls
+calls.MB0141 <- calls.with_sets[! grepl("MB0291", calls.with_sets$sample), ]
+
+# intersect of all four pairs
+calls.intersect <- filter(calls.MB0141, calls.MB0141$set == "all_pairs")
+calls.intersect$gene <- factor(calls.intersect$gene)
+
+# intersect of T vs. sorted N
+calls.sortedN <- filter(calls.MB0141, calls.MB0141$set == "T1_and_T2_v_sortedN")
+calls.sortedN$gene <- factor(calls.sortedN$gene)
+
+# intersect of T vs. buccal
+calls.buccal <- filter(calls.MB0141, calls.MB0141$set == "T1_and_T2_v_buccal")
+calls.buccal$gene <- factor(calls.buccal$gene)
+
+plot_data1 <- as.data.frame(table(calls.intersect$gene, calls.intersect$type))
+colnames(plot_data1) <- c("gene", "type", "num_mutations")
+plot_data2 <- as.data.frame(table(calls.sortedN$gene, calls.sortedN$type))
+colnames(plot_data2) <- c("gene", "type", "num_mutations")
+plot_data3 <- as.data.frame(table(calls.buccal$gene, calls.buccal$type))
+colnames(plot_data3) <- c("gene", "type", "num_mutations")
+
+p1 <- ggplot(data = plot_data1, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("All pairs (22)") 
+p2 <- ggplot(data = plot_data2, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T vs. sortedN (5)")
+p3 <- ggplot(data = plot_data3, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T vs. buccal (49)")
+
+pdf("~/Documents/CLL_WGS/figures/barplot-MB0141-all_pairs-num_mutations_by_gene.pdf", width = 12, height = 5)
+ggarrange(p1, p2, p3, ncol=3, common.legend = TRUE, legend="bottom")
+dev.off()
+
+# T1 vs. buccal only
+calls.T1_buccal <- filter(calls.MB0141, calls.MB0141$set == "T1_v_buccal_only")
+calls.T1_buccal$gene <- factor(calls.T1_buccal$gene)
+
+# T2 vs. buccal only
+calls.T2_buccal <- filter(calls.MB0141, calls.MB0141$set == "T2_v_buccal_only")
+calls.T2_buccal$gene <- factor(calls.T2_buccal$gene)
+
+# T1 vs. sorted N only
+calls.T1_sortedN <- filter(calls.MB0141, calls.MB0141$set == "T1_v_sortedN_only")
+calls.T1_sortedN$gene <- factor(calls.T1_sortedN$gene)
+
+# T2 vs. sorted N only
+calls.T2_sortedN <- filter(calls.MB0141, calls.MB0141$set == "T2_v_sortedN_only")
+calls.T2_sortedN$gene <- factor(calls.T2_sortedN$gene)
+
+plot_data4 <- as.data.frame(table(calls.T1_buccal$gene, calls.T1_buccal$type))
+colnames(plot_data4) <- c("gene", "type", "num_mutations")
+#plot_data4 <- filter(plot_data4, as.numeric(plot_data4$num_mutations) > 1)
+plot_data5 <- as.data.frame(table(calls.T2_buccal$gene, calls.T2_buccal$type))
+colnames(plot_data5) <- c("gene", "type", "num_mutations")
+#plot_data5 <- filter(plot_data5, as.numeric(plot_data5$num_mutations) > 1)
+plot_data6 <- as.data.frame(table(calls.T1_sortedN$gene, calls.T1_sortedN$type))
+colnames(plot_data6) <- c("gene", "type", "num_mutations")
+#plot_data6 <- filter(plot_data6, as.numeric(plot_data6$num_mutations) > 1)
+plot_data7 <- as.data.frame(table(calls.T2_sortedN$gene, calls.T2_sortedN$type))
+colnames(plot_data7) <- c("gene", "type", "num_mutations")
+#plot_data7 <- filter(plot_data7, as.numeric(plot_data7$num_mutations) > 1)
+
+p4 <- ggplot(data = plot_data4, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T1 vs. buccal only (64)") 
+p5 <- ggplot(data = plot_data5, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T2 vs. buccal only (66)") 
+p6 <- ggplot(data = plot_data6, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T1 vs. sortedN only (20)") 
+p7 <- ggplot(data = plot_data7, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T2 vs. sortedN only (23)") 
+
+pdf("~/Documents/CLL_WGS/figures/barplot-MB0141-unique_mutations-by_gene.pdf", width = 14, height = 6)
+ggarrange(p4, p5, p6, p7, ncol=4, common.legend = TRUE, legend="bottom")
+dev.off()
+
+```
+
+## Look at specific overlaps within venn for MB0291
+
+```{r}
+# print out overlaps
+library(gplots)
+MB0291.venn <- venn(list(MB0291_T1_vs_buccal, MB0291_T2_vs_buccal, MB0291_T2_vs_normal, MB0291_T1_vs_normal))
+#MB0291.table <- print(MB0291.venn)
+
+# get intersections
+MB0291.intersect <- attr(MB0291.venn, "intersection")
+
+# Look at all of the subsets
+str(MB0291.intersect)
+
+# A = T1 vs. buccal
+# B = T2 vs. buccal
+# C = T2 vs. sorted normal
+# D = T1 vs. sorted normal
+
+# interested in: A unique, B unique, C unique, D unique, A+B, C+D, A+B+C+D
+
+# Extract and combine the subsets of interest..
+
+# variants unique to T1 vs. buccal
+A_only <- unique(c(MB0291.intersect$A))
+A_only.label <- rep("T1_v_buccal_only", length(A_only))
+A_only.df <- data.frame(A_only, A_only.label)
+colnames(A_only.df) <- c("id", "set")
+
+# variants unique to T2 vs. buccal
+B_only <- unique(c(MB0291.intersect$B))
+B_only.label <- rep("T2_v_buccal_only", length(B_only))
+B_only.df <- data.frame(B_only, B_only.label)
+colnames(B_only.df) <- c("id", "set")
+
+# variants unique to buccal normal
+A_and_B <- unique(c(MB0291.intersect$'A:B'))
+A_and_B.label <- rep("T1_and_T2_v_buccal", length(A_and_B))
+A_and_B.df <- data.frame(A_and_B, A_and_B.label)
+colnames(A_and_B.df) <- c("id", "set")
+
+# variants unique to T1 vs. sortedN
+C_only <- unique(c(MB0291.intersect$C))
+C_only.label <- rep("T2_v_sortedN_only")
+C_only.df <- data.frame(C_only, C_only.label)
+colnames(C_only.df) <- c("id", "set")
+
+# variants unique to T2 vs. sortedN
+D_only <- unique(c(MB0291.intersect$D))
+D_only.label <- rep("T1_v_sortedN_only")
+D_only.df <- data.frame(D_only, D_only.label)
+colnames(D_only.df) <- c("id", "set")
+
+# variants unique to sortedN normal
+C_and_D <- unique(c(MB0291.intersect$'C:D'))
+C_and_D.label <- rep("T1_and_T2_v_sortedN")
+C_and_D.df <- data.frame(C_and_D, C_and_D.label)
+colnames(C_and_D.df) <- c("id", "set")
+
+# variants found in all 4 pairs
+A_B_C_D <- unique(c(MB0291.intersect$'A:B:C:D'))
+A_B_C_D.label <- rep("all_pairs", length(A_B_C_D))
+A_B_C_D.df <- data.frame(A_B_C_D, A_B_C_D.label)
+colnames(A_B_C_D.df) <- c("id", "set")
+
+all.sets <- rbind(A_only.df, B_only.df, A_and_B.df, C_only.df, D_only.df, C_and_D.df, A_B_C_D.df)
+
+# attach set labels to calls
+calls.with_sets <- merge(calls, all.sets, by = "id", all.x = TRUE)
+```
+
+## Analyze recurrently mutated genes in MB0291
+
+```{r}
+library(ggplot2)
+library(ggpubr)
+
+# remove MB0141 calls
+calls.MB0291 <- calls.with_sets[! grepl("MB0141", calls.with_sets$sample), ]
+
+# intersect of all four pairs
+calls.intersect <- filter(calls.MB0291, calls.MB0291$set == "all_pairs")
+calls.intersect$gene <- factor(calls.intersect$gene)
+
+# intersect of T vs. sorted N
+calls.sortedN <- filter(calls.MB0291, calls.MB0291$set == "T1_and_T2_v_sortedN")
+calls.sortedN$gene <- factor(calls.sortedN$gene)
+
+# intersect of T vs. buccal
+calls.buccal <- filter(calls.MB0291, calls.MB0291$set == "T1_and_T2_v_buccal")
+calls.buccal$gene <- factor(calls.buccal$gene)
+
+plot_data1 <- as.data.frame(table(calls.intersect$gene, calls.intersect$type))
+colnames(plot_data1) <- c("gene", "type", "num_mutations")
+plot_data2 <- as.data.frame(table(calls.sortedN$gene, calls.sortedN$type))
+colnames(plot_data2) <- c("gene", "type", "num_mutations")
+plot_data3 <- as.data.frame(table(calls.buccal$gene, calls.buccal$type))
+colnames(plot_data3) <- c("gene", "type", "num_mutations")
+
+p1 <- ggplot(data = plot_data1, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("All pairs (9)") 
+p2 <- ggplot(data = plot_data2, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T vs. sortedN (17)")
+p3 <- ggplot(data = plot_data3, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T vs. buccal (54)")
+
+pdf("~/Documents/CLL_WGS/figures/barplot-MB0291-all_pairs-num_mutations_by_gene.pdf", width = 12, height = 5)
+ggarrange(p1, p2, p3, ncol=3, common.legend = TRUE, legend="bottom")
+dev.off()
+
+# T1 vs. buccal only
+calls.T1_buccal <- filter(calls.MB0291, calls.MB0291$set == "T1_v_buccal_only")
+calls.T1_buccal$gene <- factor(calls.T1_buccal$gene)
+
+# T2 vs. buccal only
+calls.T2_buccal <- filter(calls.MB0291, calls.MB0291$set == "T2_v_buccal_only")
+calls.T2_buccal$gene <- factor(calls.T2_buccal$gene)
+
+# T1 vs. sorted N only
+calls.T1_sortedN <- filter(calls.MB0291, calls.MB0291$set == "T1_v_sortedN_only")
+calls.T1_sortedN$gene <- factor(calls.T1_sortedN$gene)
+
+# T2 vs. sorted N only
+calls.T2_sortedN <- filter(calls.MB0291, calls.MB0291$set == "T2_v_sortedN_only")
+calls.T2_sortedN$gene <- factor(calls.T2_sortedN$gene)
+
+plot_data4 <- as.data.frame(table(calls.T1_buccal$gene, calls.T1_buccal$type))
+colnames(plot_data4) <- c("gene", "type", "num_mutations")
+# plot_data4 <- filter(plot_data4, as.numeric(plot_data4$num_mutations) > 1)
+plot_data5 <- as.data.frame(table(calls.T2_buccal$gene, calls.T2_buccal$type))
+colnames(plot_data5) <- c("gene", "type", "num_mutations")
+# plot_data5 <- filter(plot_data5, as.numeric(plot_data5$num_mutations) > 1)
+plot_data6 <- as.data.frame(table(calls.T1_sortedN$gene, calls.T1_sortedN$type))
+colnames(plot_data6) <- c("gene", "type", "num_mutations")
+# plot_data6 <- filter(plot_data6, as.numeric(plot_data6$num_mutations) > 1)
+plot_data7 <- as.data.frame(table(calls.T2_sortedN$gene, calls.T2_sortedN$type))
+colnames(plot_data7) <- c("gene", "type", "num_mutations")
+# plot_data7 <- filter(plot_data7, as.numeric(plot_data7$num_mutations) > 1)
+
+p4 <- ggplot(data = plot_data4, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T1 vs. buccal only (42)") 
+p5 <- ggplot(data = plot_data5, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T2 vs. buccal only (22)") 
+p6 <- ggplot(data = plot_data6, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T1 vs. sortedN only (25)") 
+p7 <- ggplot(data = plot_data7, aes(x = reorder(gene, num_mutations), y = num_mutations, fill=type)) + 
+  geom_bar(stat = "identity", width = 0.6) + 
+  xlab("") + ylab("Number of Mutations") +
+  theme(axis.text.y = element_text(face="italic")) +
+  coord_flip() + ggtitle("T2 vs. sortedN only (20)") 
+
+pdf("~/Documents/CLL_WGS/figures/barplot-MB0291-unique_mutations-by_gene.pdf", width = 14, height = 6)
+ggarrange(p4, p5, p6, p7, ncol=4, common.legend = TRUE, legend="bottom")
+dev.off()
+
 ```
 
 
+## Print out full set of calls combining set labels for both MB0141 + MB0291
+
+```{r}
+calls.all <- rbind(calls.MB0141, calls.MB0291)
+
+write.table(calls.all, 
+            "~/Documents/CLL_WGS/calls/up_to_1_normal_and_UTR_filter/varScan-snvs_indels-min_VAF_5-both_set_labels.txt",
+           sep = "\t", quote = FALSE, row.names = FALSE)
+
+```
+
+## Apply two new filters for (1) normal contamination and (2) to remove UTR mutations
+
+```{r}
 
 
-
-
+```
 
 
