@@ -29,10 +29,14 @@ library(cowplot)
 
 ## Read in metrics
 
-See https://broadinstitute.github.io/picard/picard-metric-definitions.html#CollectWgsMetrics.WgsMetrics for details
+See https://broadinstitute.github.io/picard/picard-metric-definitions.html#CollectWgsMetrics.WgsMetrics and
+https://broadinstitute.github.io/picard/picard-metric-definitions.html#AlignmentSummaryMetrics for details
 
 ```{r}
-metrics <- read.table("~/Documents/CLL_WGS/metrics/all.wgs_metrics.txt", sep = "\t", header = TRUE)
+hs.metrics <- read.table("~/Documents/CLL_WGS/metrics/all.wgs_metrics.txt", sep = "\t", header = TRUE)
+align.metrics <- read.table("~/Documents/CLL_WGS/metrics/all.alignment_summary_metrics.txt", sep = "\t", header = TRUE)
+
+metrics <- merge(hs.metrics, align.metrics, by = "sampleID")
 
 # extract patient ID
 metrics <- separate(
@@ -45,35 +49,60 @@ metrics <- separate(
 
 # get mean coverage
 metrics.avg_coverage <- mean(metrics$MEAN_COVERAGE)
+
+# remove uninformative columns
+metrics$BAD_CYCLES <- NULL
+metrics$PF_NOISE_READS <- NULL
+metrics$PF_HQ_MEDIAN_MISMATCHES <- NULL
+
 # convert from wide to long
-metrics.long <- gather(metrics, metric, value, "MEAN_COVERAGE":"SD_COVERAGE")
+metrics.long <- gather(metrics, metric, value, "MEAN_COVERAGE":"PCT_ADAPTER")
 
 # sort by decreasing order of metric
 data.sorted <- metrics.long %>%
   dplyr::arrange(metric, value) %>%
   dplyr::select(sampleID, patient, tissue_type, metric, value)
 
-# Plot MEAN_COVERAGE and SD_COVERAGE
-p.sorted <- ggplot(data.sorted, aes(x = sampleID, y = value, fill=tissue_type)) + 
-      geom_bar(stat = "identity", width = 0.8) + 
-      facet_wrap( ~ metric, scales = "free") + 
-      ylab("") + xlab("") +
-      theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 10))
+# coverage metrics of interest
+metrics.coverage <- c("MEAN_COVERAGE", "SD_COVERAGE")
+data.coverage <- filter(data.sorted, data.sorted$metric %in% metrics.coverage)
 
-pdf("~/Documents/CLL_WGS/figures/barplot-mean_and_SD_coverage.pdf", width = 10, height = 5)
-p.sorted
-dev.off()
+# excluded bases - metrics of interest
+metrics.excluded <- c("PCT_EXC_DUPE", "PCT_EXC_MAPQ", "PCT_EXC_OVERLAP", "PCT_EXC_TOTAL")
+data.excluded <- filter(data.sorted, data.sorted$metric %in% metrics.excluded)
 
-mean(metrics$PCT_EXC_MAPQ) # fraction of bases removed due to low mapping quality
-mean(metrics$PCT_EXC_BASEQ) # fraction of bases removed due to low base quality
-mean(metrics$PCT_EXC_DUPE) # fraction of bases removed due to duplicates
-mean(metrics$PCT_EXC_TOTAL) # total bases removed based on all filters
+# total reads and aligned reads - metrics of interest
+metrics.reads <- c("TOTAL_READS", "PCT_PF_READS_ALIGNED")
+data.reads <- filter(data.sorted, data.sorted$metric %in% metrics.reads)
+
+# plot 
+plot_and_save_metrics(data.sorted, "barplot-all_metrics.pdf", width = 40, height = 20)
+plot_and_save_metrics(data.coverage, "barplot-coverage.pdf", width = 10, height = 5)
+plot_and_save_metrics(data.excluded, "barplot-excluded.pdf", width = 10, height = 10)
+plot_and_save_metrics(data.reads, "barplot-reads.pdf", width = 10, height = 5)
+
 ```
 
 Samples: `r unique(metrics$sampleID)`
 
 Average coverage (n=`r length(unique(metrics$sampleID))`): `r round(metrics.avg_coverage)`X
 
+## Function to plot metrics
+
+```{r}
+plot_and_save_metrics <- function(data, file, width, height) {
+  p <- ggplot(data, aes(x = sampleID, y = value, fill=tissue_type)) + 
+      geom_bar(stat = "identity", width = 0.8) + 
+      facet_wrap( ~ metric, scales = "free") + 
+      ylab("") + xlab("") +
+      theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 10))
+
+  pdf(paste("~/Documents/CLL_WGS/figures/", file, sep=""), width = width, height = height)
+  print(p)
+  dev.off()
+}
+
+```
 
 ## Define samples to be excluded and global variables
 
